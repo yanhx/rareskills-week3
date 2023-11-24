@@ -1,0 +1,17 @@
+{
+    "filter_paths": "lib",
+    "solc_remaps": [
+      "ds-test/=lib/ds-test/src/",
+      "forge-std/=lib/forge-std/src/",
+      "@chainlink/=lib/chainlink-brownie-contracts/"
+    ],
+    "legacy_ast": false,
+    "exclude_dependencies": true,
+    "detectors_to_exclude": "conformance-to-solidity-naming-conventions,incorrect-versions-of-solidity",
+    "exclude_informational": false,
+    "exclude_low": false,
+    "exclude_medium": false,
+    "exclude_high": false,
+    "disable_color": false
+  }
+  
