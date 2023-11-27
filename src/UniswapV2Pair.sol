@@ -7,7 +7,7 @@ import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
 import {IUniswapV2Factory} from "./interfaces/IUniswapV2Factory.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {FixedPointMathLib} from "@solady/src/utils/FixedPointMathLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {UniswapV2ERC20} from "./UniswapV2ERC20.sol";
 
@@ -56,7 +56,7 @@ contract UniswapV2Pair is
     }
 
     // update reserves and, on the first call per block, price accumulators
-    // ? how to guarantee the first call per block???
+    // ? how to guarantee the first call per block?? timeElapsed > 0
     function _update(uint256 balance0, uint256 balance1, uint112 _reserve0, uint112 _reserve1) private {
         require(balance0 <= type(uint112).max && balance1 <= type(uint112).max, "UniswapV2: OVERFLOW");
 
@@ -66,13 +66,13 @@ contract UniswapV2Pair is
 
         unchecked {
             timeElapsed = blockTimestamp - blockTimestampLast; // overflow is desired
-        }
 
-        if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
-            // * never overflows, and + overflow is desired
-            // the orginal uniswap desgin: uint112=>uint256=> UD60x18(operations)=> uint
-            price0CumulativeLast += unwrap(ud(uint256(_reserve1)) / ud(uint256(_reserve0))) * timeElapsed;
-            price1CumulativeLast += unwrap(ud(uint256(_reserve0)) / ud(uint256(_reserve1))) * timeElapsed;
+            if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
+                // * never overflows, and + overflow is desired
+                // the orginal uniswap desgin: uint112=>uint256=> UD60x18(operations)=> uint
+                price0CumulativeLast += unwrap(ud(uint256(_reserve1)) / ud(uint256(_reserve0))) * timeElapsed;
+                price1CumulativeLast += unwrap(ud(uint256(_reserve0)) / ud(uint256(_reserve1))) * timeElapsed;
+            }
         }
         reserve0 = uint112(balance0);
         reserve1 = uint112(balance1);
@@ -87,8 +87,8 @@ contract UniswapV2Pair is
         uint256 _kLast = kLast; // gas savings
         if (feeOn) {
             if (_kLast != 0) {
-                uint256 rootK = Math.sqrt(uint256(_reserve0) * (_reserve1));
-                uint256 rootKLast = Math.sqrt(_kLast);
+                uint256 rootK = FixedPointMathLib.sqrt(uint256(_reserve0) * (_reserve1));
+                uint256 rootKLast = FixedPointMathLib.sqrt(_kLast);
                 if (rootK > rootKLast) {
                     uint256 numerator = totalSupply() * (rootK - rootKLast);
                     uint256 denominator = rootK * 5 + rootKLast;
@@ -112,10 +112,11 @@ contract UniswapV2Pair is
         bool feeOn = _mintFee(_reserve0, _reserve1);
         uint256 _totalSupply = totalSupply(); // gas savings, must be defined here since totalSupply can update in _mintFee
         if (_totalSupply == 0) {
-            liquidity = Math.sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
+            liquidity = FixedPointMathLib.sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
             _mint(address(0), MINIMUM_LIQUIDITY); // permanently lock the first MINIMUM_LIQUIDITY tokens TODO//  address(0) => address(1) ,for ERC20Permit first MINIMUM_LIQUIDITY
         } else {
-            liquidity = Math.min((amount0 * _totalSupply) / _reserve0, (amount1 * _totalSupply) / _reserve1);
+            liquidity =
+                FixedPointMathLib.min((amount0 * _totalSupply) / _reserve0, (amount1 * _totalSupply) / _reserve1);
         }
         require(liquidity > 0, "UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED");
         _mint(to, liquidity);

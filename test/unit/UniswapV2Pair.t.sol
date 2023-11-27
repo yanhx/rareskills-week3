@@ -2,7 +2,7 @@
 
 pragma solidity 0.8.20;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, console, stdError} from "forge-std/Test.sol";
 
 import {ERC20Mock} from "lib/solady/ext/woke/ERC20Mock.sol";
 import {UniswapV2Factory} from "../../src/UniswapV2Factory.sol";
@@ -11,11 +11,16 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {ud, unwrap, UD60x18} from "@prb/math/src/UD60x18.sol";
 
+import {SigUtils} from "../SigUtils.sol";
+
 contract UniswapV2PairTest is Test {
     address public _feeToSetter = address(0x30);
     address public pairAddress;
     address public lockAddress = address(0x0);
     address public zeroAddress = address(0x0);
+
+    address alice = makeAddr("alice");
+    address bob = makeAddr("bob");
 
     ERC20Mock tokenA;
     ERC20Mock tokenB;
@@ -25,6 +30,13 @@ contract UniswapV2PairTest is Test {
 
     UniswapV2Pair public uniswapV2Pair;
     UniswapV2Factory uniswapV2Factory;
+
+    //for permit test
+    SigUtils internal sigUtils;
+    uint256 internal ownerPrivateKey;
+    uint256 internal spenderPrivateKey;
+    address internal owner;
+    address internal spender;
 
     uint256 constant INIT_TOKEN_AMT = 100000e18;
 
@@ -49,6 +61,8 @@ contract UniswapV2PairTest is Test {
         tokenB = new ERC20Mock('TOKENB','TB', 18);
         tokenA.mint(address(this), INIT_TOKEN_AMT);
         tokenB.mint(address(this), INIT_TOKEN_AMT);
+        tokenA.mint(alice, INIT_TOKEN_AMT);
+        tokenB.mint(alice, INIT_TOKEN_AMT);
 
         uniswapV2Factory = new UniswapV2Factory(_feeToSetter);
         pairAddress = uniswapV2Factory.createPair(address(tokenA), address(tokenB));
@@ -95,23 +109,23 @@ contract UniswapV2PairTest is Test {
      * test  init mint， transfer 1  token and 4 token, for the first time
      */
     function test_Mint() public {
-        uint256 token0transferAmount = 1 * 10 ** token0.decimals();
-        uint256 token1transferAmount = 4 * 10 ** token1.decimals();
+        uint256 token0transferAmount = 1 ether;
+        uint256 token1transferAmount = 4 ether;
 
         token0.transfer(pairAddress, token0transferAmount);
         token1.transfer(pairAddress, token1transferAmount);
 
         uint256 expectedLiquidity = Math.sqrt(token0transferAmount * token1transferAmount);
-        vm.expectEmit(address(pairAddress));
-
+        vm.expectEmit(pairAddress);
         // for the first mint, should lock  MINIMUM_LIQUIDITY forever
         emit Transfer(address(0), lockAddress, uniswapV2Pair.MINIMUM_LIQUIDITY());
         // transfer LP to the caller
         uint256 actualLiquidity = expectedLiquidity - uniswapV2Pair.MINIMUM_LIQUIDITY();
+        vm.expectEmit(pairAddress);
         emit Transfer(address(0), address(this), actualLiquidity);
-
+        vm.expectEmit(pairAddress);
         emit Sync(uint112(token0.balanceOf(pairAddress)), uint112(token1.balanceOf(pairAddress)));
-
+        vm.expectEmit(pairAddress);
         // first mint, amount0 and amount1 equal the corresponding token transfer amount
         emit Mint(address(this), token0.balanceOf(pairAddress), uint112(token1.balanceOf(pairAddress)));
 
@@ -159,12 +173,11 @@ contract UniswapV2PairTest is Test {
      */
     function test_AddLiquidity() public {
         // init mint,
-        uint256[2] memory addAmounts = [1 * 10 ** token0.decimals(), 4 * 10 ** token1.decimals()];
-        uint256 expectedLiquidity = Math.sqrt(addAmounts[0] * addAmounts[1]);
+        uint256[2] memory addAmounts = [uint256(1 ether), uint256(4 ether)];
+        uint256 expectedl1 = Math.sqrt(addAmounts[0] * addAmounts[1]);
         addLiquidity(addAmounts[0], addAmounts[1]);
-        assertEq(uniswapV2Pair.balanceOf(address(this)), expectedLiquidity - uniswapV2Pair.MINIMUM_LIQUIDITY());
-        uint256 firstLPAmount = uniswapV2Pair.balanceOf(address(this));
-        console.log(firstLPAmount);
+        assertEq(uniswapV2Pair.balanceOf(address(this)), expectedl1 - uniswapV2Pair.MINIMUM_LIQUIDITY());
+        uint256 l1 = uniswapV2Pair.balanceOf(address(this));
 
         // add liquidity after mint
         // normal
@@ -180,40 +193,65 @@ contract UniswapV2PairTest is Test {
         // 1999999999999999000 + 2000000000000000000
 
         // after initing the pool, add liquidity again,
-        uint256[2] memory addAmounts2 = [1 * 10 ** token0.decimals(), 4 * 10 ** token1.decimals()];
-        uint256 expectedLiquidity2 = Math.sqrt(addAmounts2[0] * addAmounts2[1]);
+        uint256[2] memory addAmounts2 = [uint256(1 ether), uint256(4 ether)];
+        uint256 expectedl2 = Math.sqrt(addAmounts2[0] * addAmounts2[1]);
         addLiquidity(addAmounts2[0], addAmounts2[1]);
-        assertEq(uniswapV2Pair.balanceOf(address(this)), expectedLiquidity2 + firstLPAmount);
+        assertEq(uniswapV2Pair.balanceOf(address(this)), expectedl2 + l1);
         // console.log(uniswapV2Pair.balanceOf(address(this)));
         // the lp token are not propratation to the received pair tokens, of there are more pair token, how to deal with it, use sync()
-        //
 
-        // Exception test
-        // uint[2] memory addAmounts3 = [1*10**tokenA.decimals(),0];
-        // tokenA.transfer(pairAddress,addAmounts3[0]);
-        // tokenB.transfer(pairAddress,addAmounts3[1]);
-        // vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED"));
-        // UniswapV2Pair(pairAddress).mint(address(this));
-
-        uint256[2] memory addAmounts4 = [0, 1 * 10 ** token0.decimals()];
+        uint256[2] memory addAmounts4 = [0, uint256(1 ether)];
         token0.transfer(pairAddress, addAmounts4[0]);
         token1.transfer(pairAddress, addAmounts4[1]);
         vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED"));
-        UniswapV2Pair(pairAddress).mint(address(this));
+        uniswapV2Pair.mint(address(this));
     }
 
     function test_MintWithReserve() public {
-        token0.transfer(address(uniswapV2Pair), 1 ether);
-        token1.transfer(address(uniswapV2Pair), 1 ether);
-        uint256 l1 = uniswapV2Pair.mint(address(this));
-
-        token0.transfer(address(uniswapV2Pair), 2 ether);
-        token1.transfer(address(uniswapV2Pair), 2 ether);
-        uint256 l2 = uniswapV2Pair.mint(address(this));
+        uint256 l1 = addLiquidity(1 ether, 1 ether);
+        uint256 l2 = addLiquidity(2 ether, 2 ether);
 
         assertPairReserves(3 ether, 3 ether);
         assertEq(uniswapV2Pair.balanceOf(address(this)), l1 + l2);
         assertEq(uniswapV2Pair.totalSupply(), l1 + l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+    }
+
+    function test_MintUnequalBalance() public {
+        uint256 l1 = addLiquidity(1 ether, 1 ether);
+        uint256 l2 = addLiquidity(4 ether, 1 ether);
+
+        assertPairReserves(5 ether, 2 ether);
+        assertEq(uniswapV2Pair.balanceOf(address(this)), l1 + l2);
+        assertEq(uniswapV2Pair.totalSupply(), l1 + l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+    }
+
+    function test_MintArithmeticUnderflow() public {
+        // 0x11: Arithmetic over/underflow
+        vm.expectRevert(stdError.arithmeticError);
+
+        uniswapV2Pair.mint(address(this));
+    }
+
+    function test_MintInsufficientLiquidity() public {
+        token0.transfer(pairAddress, 1000);
+        token1.transfer(pairAddress, 1000);
+
+        vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED"));
+        uniswapV2Pair.mint(address(this));
+    }
+
+    function test_MintMultipleUsers() public {
+        uint256 l1 = addLiquidity(1 ether, 1 ether);
+        uint256 l2 = addLiquidity(alice, 2 ether, 3 ether);
+
+        uint256 expectedLiquidity = Math.sqrt(1 ether * 1 ether);
+
+        assertPairReserves(3 ether, 4 ether);
+        assertEq(uniswapV2Pair.balanceOf(address(this)), l1);
+        assertEq(l1 + uniswapV2Pair.MINIMUM_LIQUIDITY(), expectedLiquidity);
+        assertEq(uniswapV2Pair.balanceOf(alice), l2);
+        assertEq(l2, expectedLiquidity * 2);
+        assertEq(uniswapV2Pair.totalSupply(), expectedLiquidity * 3);
     }
 
     /**
@@ -224,7 +262,7 @@ contract UniswapV2PairTest is Test {
      *     /expect test
      */
 
-    //  problem:  [1, 5, 10, 1662497915624478906], my calculated resut is: (10*1)*1e18/(5+1) = 1666666666666666666
+    //  problem:  [1, 5, 10, 1662497915624478906], my calculated resut is: 10-(10*5)*1e18/(5*0.997+1) = 1662497915624478906
     //  given the pool, the swapAmount of token0, check the output Amount of token1 is right
     function test_SwapNormalCases() public {
         uint64[4][7] memory arrays_test = [
@@ -241,19 +279,26 @@ contract UniswapV2PairTest is Test {
                 [(arrays_test[i][1] * uint256(1e18)), uint256(arrays_test[i][2]) * uint256(1e18)];
             uint256 swapAmount = uint256(arrays_test[i][0]) * uint256(1e18);
             uint256 expectedOutputAmount1 = arrays_test[i][3];
-            console.log(swapAmount);
-            // vm.expectRevert(bytes("UniswapV2: K"));
-            SwapTest(swapAmount, liqudity, 0, expectedOutputAmount1);
+
+            addLiquidity(liqudity[0], liqudity[1]);
+            token0.transfer(pairAddress, swapAmount);
+            //max output + 1 -> revert
+            vm.expectRevert(bytes("UniswapV2: K"));
+            uniswapV2Pair.swap(0, expectedOutputAmount1 + 1, alice);
+
+            //max output
+            uniswapV2Pair.swap(0, expectedOutputAmount1, alice);
+
             // rebuild the pool address
             uniswapV2Factory = new UniswapV2Factory(_feeToSetter);
             pairAddress = uniswapV2Factory.createPair(address(tokenA), address(tokenB));
             uniswapV2Pair = UniswapV2Pair(pairAddress);
-            console.log("pairAddress", pairAddress);
+            // console.log("pairAddress", pairAddress);
             (token0, token1) = getOrderERC20Mock(tokenA, tokenB);
         }
     }
 
-    // same toke swap and same toke return.
+    // same toke swap and same token return.
     // 1/2/3 give the inputAmount, calculate the outputAmout
     // 4 given the  outputAmout, calculate the inputAmount
     function test_SwapCasesWithFees() public {
@@ -268,94 +313,155 @@ contract UniswapV2PairTest is Test {
             uint256[2] memory liqudity = [(arrays_test[i][1] * 1e18), uint256(arrays_test[i][2]) * 1e18];
 
             uint256 swapAmount = i < 3 ? uint256(arrays_test[i][3]) * uint256(1e18) : arrays_test[i][3];
-            uint256 expectedOutputAmount0 = i < 3 ? arrays_test[i][0] : uint256(arrays_test[i][0]) ** uint256(1e18);
-            SwapTest(swapAmount, liqudity, expectedOutputAmount0, 0);
+            uint256 expectedOutputAmount0 = i < 3 ? arrays_test[i][0] : uint256(arrays_test[i][0]) * uint256(1e18);
+            addLiquidity(liqudity[0], liqudity[1]);
+            token0.transfer(pairAddress, swapAmount);
+            //max output + 1 -> revert
+            vm.expectRevert(bytes("UniswapV2: K"));
+            uniswapV2Pair.swap(expectedOutputAmount0 + 1, 0, alice);
+
+            //max output
+            uniswapV2Pair.swap(expectedOutputAmount0, 0, alice);
 
             // rebuild the pool address
             uniswapV2Factory = new UniswapV2Factory(_feeToSetter);
             pairAddress = uniswapV2Factory.createPair(address(tokenA), address(tokenB));
             uniswapV2Pair = UniswapV2Pair(pairAddress);
-            console.log("pairAddress", pairAddress);
+            //console.log("pairAddress", pairAddress);
             (token0, token1) = getOrderERC20Mock(tokenA, tokenB);
         }
-
-        // test:amountIn = ceiling(amountOut / .997)
-        uint256 result = Math.ceilDiv(10 ** 21, 997);
-        console.log(result);
     }
 
     function test_SwapToken0AndCheck() public {
-        uint256[2] memory liqudity = [uint256(5 * 1e18), uint256(10 * 1e18)];
+        uint256[2] memory liqudity = [uint256(5 ether), uint256(10 ether)];
         addLiquidity(liqudity[0], liqudity[1]);
-        uint256 swapAmount = 1e18;
-        // also a quesiton, can not figure out how to calculate the result
-        uint256 expectedOutputAmount = 1662497915624478906; //(liqudity[1]*swapAmount)/(swapAmount+liqudity[0]) 1666666666666666666 1662497915624478906
+        uint256 swapAmount = 1 ether;
+
+        uint256 expectedOutputAmount = 1662497915624478906; //(liqudity[1]*swapAmount)/(swapAmount+liqudity[0])  1662497915624478906
         token0.transfer(pairAddress, swapAmount);
 
         // pair transfer the token1 to the this address
+        vm.expectEmit(address(token1));
         emit Transfer(pairAddress, address(this), expectedOutputAmount);
         // Sync the balance0 and balance1
+        vm.expectEmit(pairAddress);
         emit Sync(uint112(swapAmount + liqudity[0]), uint112(liqudity[1] - expectedOutputAmount));
 
         // check the swap event
-        emit Swap(pairAddress, swapAmount, 0, 0, expectedOutputAmount, address(this));
+        vm.expectEmit(pairAddress);
+        emit Swap(address(this), swapAmount, 0, 0, expectedOutputAmount, address(this));
 
         uniswapV2Pair.swap(0, expectedOutputAmount, address(this));
-        (uint112 _reserve0, uint112 _reserve1,) = uniswapV2Pair.getReserves();
 
-        // check all kinds of balance
-        assertEq(_reserve0, liqudity[0] + swapAmount);
-        assertEq(_reserve1, liqudity[1] - expectedOutputAmount);
+        assertPairReserves(liqudity[0] + swapAmount, liqudity[1] - expectedOutputAmount);
 
         assertEq(token0.balanceOf(pairAddress), liqudity[0] + swapAmount);
         assertEq(token1.balanceOf(pairAddress), liqudity[1] - expectedOutputAmount);
 
-        uint256 totalSupplyToken0 = token0.totalSupply();
-        uint256 totalSupplyToken1 = token1.totalSupply();
-        assertEq(token0.balanceOf(address(this)), totalSupplyToken0 - liqudity[0] - swapAmount);
-        assertEq(token1.balanceOf(address(this)), totalSupplyToken1 - liqudity[1] + expectedOutputAmount);
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - liqudity[0] - swapAmount);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - liqudity[1] + expectedOutputAmount);
     }
 
     // just the opposite of the test_SwapToken0AndCheck
     function test_SwapToken1AndCheck() public {
-        uint256[2] memory liqudity = [uint256(5 * 1e18), uint256(10 * 1e18)];
+        uint256[2] memory liqudity = [uint256(5 ether), uint256(10 ether)];
         addLiquidity(liqudity[0], liqudity[1]);
-        uint256 swapAmount = uint256(1e18);
+        uint256 swapAmount = 1 ether;
         // also a quesiton, can not figure out how to calculate the result
         uint256 expectedOutputAmount = 453305446940074565;
         token1.transfer(pairAddress, swapAmount);
 
         // pair transfer the token1 to the this address
+        vm.expectEmit(address(token0));
         emit Transfer(pairAddress, address(this), expectedOutputAmount);
 
         // Sync the balance0 and balance1
-        emit Sync(uint112(liqudity[1] - expectedOutputAmount), uint112(swapAmount + liqudity[0]));
+        vm.expectEmit(pairAddress);
+        emit Sync(uint112(liqudity[0] - expectedOutputAmount), uint112(swapAmount + liqudity[1]));
 
         // check the swap event
-        emit Swap(pairAddress, 0, swapAmount, 0, expectedOutputAmount, address(this));
+        vm.expectEmit(pairAddress);
+        emit Swap(address(this), 0, swapAmount, expectedOutputAmount, 0, address(this));
 
         uniswapV2Pair.swap(expectedOutputAmount, 0, address(this));
-        (uint112 _reserve0, uint112 _reserve1,) = uniswapV2Pair.getReserves();
 
-        // // check all kinds of balance
-        assertEq(_reserve0, liqudity[0] - expectedOutputAmount);
-        assertEq(_reserve1, liqudity[1] + swapAmount);
+        assertPairReserves(liqudity[0] - expectedOutputAmount, liqudity[1] + swapAmount);
 
         assertEq(token0.balanceOf(pairAddress), liqudity[0] - expectedOutputAmount);
         assertEq(token1.balanceOf(pairAddress), liqudity[1] + swapAmount);
 
-        uint256 totalSupplyToken0 = token0.totalSupply();
-        uint256 totalSupplyToken1 = token1.totalSupply();
-        assertEq(token0.balanceOf(address(this)), totalSupplyToken0 - liqudity[0] + expectedOutputAmount);
-        assertEq(token1.balanceOf(address(this)), totalSupplyToken1 - liqudity[1] - swapAmount);
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - liqudity[0] + expectedOutputAmount);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - liqudity[1] - swapAmount);
+    }
+
+    function test_SwapSimple() public {
+        addLiquidity(1 ether, 1 ether);
+
+        // transfer to maintain K
+        token1.transfer(pairAddress, 1.1 ether);
+        uniswapV2Pair.swap(0.5 ether, 0 ether, alice);
+
+        assertPairReserves(0.5 ether, 2.1 ether);
+        assertEq(token0.balanceOf(alice), INIT_TOKEN_AMT + 0.5 ether);
+    }
+
+    function test_SwapMultipleUserLiquidity() public {
+        addLiquidity(1 ether, 1 ether);
+        addLiquidity(alice, 2 ether, 3 ether);
+
+        // transfer to maintain K
+        token0.transfer(pairAddress, 1.1 ether);
+
+        uniswapV2Pair.swap(0 ether, 1 ether, alice);
+
+        assertPairReserves(4.1 ether, 3 ether);
+    }
+
+    function testSwapInvalidAmount() public {
+        vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT"));
+        uniswapV2Pair.swap(0 ether, 0 ether, alice);
+    }
+
+    function testSwapInsufficientLiquidity() public {
+        addLiquidity(1 ether, 1 ether);
+
+        vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_LIQUIDITY"));
+        uniswapV2Pair.swap(3 ether, 0 ether, alice);
+
+        vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_LIQUIDITY"));
+        uniswapV2Pair.swap(0 ether, 3 ether, alice);
+    }
+
+    function test_SwapSwapToSelf() public {
+        addLiquidity(2 ether, 2 ether);
+
+        vm.expectRevert(bytes("UniswapV2: INVALID_TO"));
+        uniswapV2Pair.swap(1 ether, 0 ether, address(token0));
+
+        vm.expectRevert(bytes("UniswapV2: INVALID_TO"));
+        uniswapV2Pair.swap(0 ether, 1 ether, address(token1));
+    }
+
+    function test_SwapInvalidConstantProductFormula() public {
+        addLiquidity(1 ether, 1 ether);
+
+        token1.transfer(pairAddress, 1 ether);
+        vm.expectRevert(bytes("UniswapV2: K"));
+        uniswapV2Pair.swap(0.5 ether, 0 ether, alice);
+
+        uniswapV2Pair.skim(address(this));
+        token0.transfer(pairAddress, 1 ether);
+        vm.expectRevert(bytes("UniswapV2: K"));
+        uniswapV2Pair.swap(0 ether, 0.5 ether, alice);
     }
 
     // hints: because the MINIMUM_LIQUIDITY,received token0 and token1 will decrease 1000 TODO
     // TODO,. TEST: which scenario will received all LP. how to receive all token0 and token1
     // if after burn lp,  the left lp is greater than MINIMUM_LIQUIDITY, this scenario the burner will receve all token
-    function test_burn() public {
+
+    function test_Burn() public {
         // init the pool
-        uint256[2] memory liqudity = [uint256(3 * 1e18), uint256(3 * 1e18)];
+        uint256[2] memory liqudity = [uint256(3 ether), uint256(3 ether)];
         addLiquidity(liqudity[0], liqudity[1]);
 
         // burn the liquidity
@@ -365,16 +471,21 @@ contract UniswapV2PairTest is Test {
         // second step: execute the burn function
 
         // pair transfer the transfered liquidity to the zero address
+        vm.expectEmit(pairAddress);
         emit Transfer(pairAddress, zeroAddress, expectedReceivedLiquidity);
         // pair transfer the token0 and token1 to the test addres, because the MINIMUM_LIQUIDITY, 1000(token0)*1000(token1) lock forever
+        vm.expectEmit(address(token0));
         emit Transfer(pairAddress, address(this), liqudity[0] - 1000);
+        vm.expectEmit(address(token1));
         emit Transfer(pairAddress, address(this), liqudity[1] - 1000);
 
         // Sync the balance0 and balance1, the minium balance
+        vm.expectEmit(pairAddress);
         emit Sync(uint112(1000), uint112(1000));
 
         // check the swap event
-        emit Burn(pairAddress, liqudity[0] - 1000, liqudity[0] - 1000, address(this));
+        vm.expectEmit(pairAddress);
+        emit Burn(address(this), liqudity[0] - 1000, liqudity[0] - 1000, address(this));
 
         uniswapV2Pair.burn(address(this));
 
@@ -387,18 +498,15 @@ contract UniswapV2PairTest is Test {
         assertEq(token1.balanceOf(pairAddress), 1000);
 
         // check token0 and token1 balance for testAddress
-        uint256 totalSupplyToken0 = token0.totalSupply();
-        uint256 totalSupplyToken1 = token1.totalSupply();
-
-        assertEq(token0.balanceOf(address(this)), totalSupplyToken0 - 1000);
-        assertEq(token1.balanceOf(address(this)), totalSupplyToken1 - 1000);
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - 1000);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - 1000);
     }
 
-    function test_burnReceivedAllTokens() public {
+    function test_BurnReceivedAllTokens() public {
         // guarantee the MINIMUM_LIQUIDITY exists
-        test_burn();
+        test_Burn();
         console.log(" guarantee the MINIMUM_LIQUIDITY exists");
-        uint256[2] memory liqudity = [uint256(3 * 1e18), uint256(3 * 1e18)];
+        uint256[2] memory liqudity = [uint256(3 ether), uint256(3 ether)];
         addLiquidity(liqudity[0], liqudity[1]);
 
         // burn the liquidity
@@ -408,16 +516,21 @@ contract UniswapV2PairTest is Test {
         // second step: execute the burn function
 
         // pair transfer the transfered liquidity to the zero address
+        vm.expectEmit(pairAddress);
         emit Transfer(pairAddress, zeroAddress, expectedReceivedLiquidity);
         // pair transfer the token0 and token1 to the test addres, because the MINIMUM_LIQUIDITY, 1000(token0)*1000(token1) lock forever
+        vm.expectEmit(address(token0));
         emit Transfer(pairAddress, address(this), liqudity[0]);
+        vm.expectEmit(address(token1));
         emit Transfer(pairAddress, address(this), liqudity[1]);
 
         // Sync the balance0 and balance1, the minium balance
+        vm.expectEmit(pairAddress);
         emit Sync(uint112(1000), uint112(1000));
 
         // check the swap event
-        emit Burn(pairAddress, liqudity[0], liqudity[0], address(this));
+        vm.expectEmit(pairAddress);
+        emit Burn(address(this), liqudity[0], liqudity[0], address(this));
 
         uniswapV2Pair.burn(address(this));
 
@@ -430,81 +543,154 @@ contract UniswapV2PairTest is Test {
         assertEq(token1.balanceOf(pairAddress), 1000);
 
         // check token0 and token1 balance for testAddress
-        uint256 totalSupplyToken0 = token0.totalSupply();
-        uint256 totalSupplyToken1 = token1.totalSupply();
-
-        assertEq(token0.balanceOf(address(this)), totalSupplyToken0 - 1000);
-        assertEq(token1.balanceOf(address(this)), totalSupplyToken1 - 1000);
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - 1000);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - 1000);
     }
 
-    function test_TAWP() public {
-        uint256[2] memory liqudity = [3 * 10 ** token0.decimals(), 3 * 10 ** token1.decimals()];
-        addLiquidity(liqudity[0], liqudity[1]);
-        (uint256 price0CumulativeLast0, uint256 price1CumulativeLast0, uint32 blockTimestampStart) =
-            uniswapV2Pair.getReserves();
+    function test_BurnSimple() public {
+        uint256 liquidity = addLiquidity(1 ether, 1 ether);
 
-        vm.warp(blockTimestampStart + 1); // mint the next block
-        uniswapV2Pair.sync(); // sync, calculated the elasped time
+        uniswapV2Pair.transfer(pairAddress, liquidity);
+        uniswapV2Pair.burn(address(this));
 
-        // first call the _update( sync after addLiquidity,sync will take the time to the TAMP's calculation )
-        (uint256 price0, uint256 price1) = calculatePrice(liqudity[0], liqudity[1]);
-        assertEq(uniswapV2Pair.price0CumulativeLast(), price0);
-        assertEq(uniswapV2Pair.price1CumulativeLast(), price1);
-        assertEq(blockTimestampStart, 1);
-
-        // second call the_update(swap), the price should based on the last block's price
-        uint256 swapAmount = 3 * 10 ** token0.decimals();
-        token0.transfer(pairAddress, swapAmount);
-        vm.warp(blockTimestampStart + 10); // mint the next block
-        uint256 expectedOutputAmount1 = 1 * 10 ** token0.decimals();
-        uniswapV2Pair.swap(0, expectedOutputAmount1, address(this)); // swap to a new price eagerly instead of syncing
-        (,, uint32 blockTimestampAfterSwap) = uniswapV2Pair.getReserves();
-        assertEq(uniswapV2Pair.price0CumulativeLast(), price0 * 10);
-        assertEq(uniswapV2Pair.price1CumulativeLast(), price1 * 10);
-        assertEq(blockTimestampAfterSwap, blockTimestampStart + 10);
-
-        // third call the _update
-        vm.warp(blockTimestampStart + 20); // mint the next block
-        uniswapV2Pair.sync(); // sync, calculated the elasped time
-
-        (uint256 price0Second, uint256 price1Second) =
-            calculatePrice(liqudity[0] + swapAmount, liqudity[1] - expectedOutputAmount1);
-        (uint256 price0CumulativeLast3, uint256 price1CumulativeLast3, uint32 blockTimestampThirdUpdate) =
-            uniswapV2Pair.getReserves();
-        assertEq(uniswapV2Pair.price0CumulativeLast(), price0 * 10 + price0Second * 10);
-        assertEq(uniswapV2Pair.price1CumulativeLast(), price1 * 10 + price1Second * 10);
-        assertEq(blockTimestampThirdUpdate, blockTimestampStart + 20);
-
-        // According to the TAMP, calculating the price
-        // from blockTimestampStart =>blockTimestampStart+20
-        uint256 price0For20seconds =
-            (price0CumulativeLast3 - price0CumulativeLast0) / (blockTimestampStart + 20 - blockTimestampStart);
-        uint256 price1For20seconds =
-            (price1CumulativeLast0 - price1CumulativeLast3) / (blockTimestampStart + 20 - blockTimestampStart);
-        console.log("priceFo20seconds", price0For20seconds);
-        console.log("price1For20seconds", price1For20seconds);
-
-        // questions:
-        // how to use? which protocols use?
-        // how to prevent the manipulation by using TAWP.
-        // the cost of attack. how to attack?
+        assertEq(uniswapV2Pair.balanceOf(address(this)), 0);
+        assertEq(uniswapV2Pair.totalSupply(), uniswapV2Pair.MINIMUM_LIQUIDITY());
+        assertPairReserves(uniswapV2Pair.MINIMUM_LIQUIDITY(), uniswapV2Pair.MINIMUM_LIQUIDITY());
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - uniswapV2Pair.MINIMUM_LIQUIDITY());
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - uniswapV2Pair.MINIMUM_LIQUIDITY());
     }
 
-    function addLiquidity(uint256 token0Amount, uint256 token1Amount) private {
+    function test_BurnUnequal() public {
+        uint256 l0 = addLiquidity(1 ether, 1 ether);
+        uint256 l1 = addLiquidity(1 ether, 2 ether);
+
+        uniswapV2Pair.transfer(pairAddress, l0 + l1);
+        (uint256 amount0, uint256 amount1) = uniswapV2Pair.burn(address(this));
+
+        assertEq(uniswapV2Pair.balanceOf(address(this)), 0);
+        assertEq(uniswapV2Pair.totalSupply(), uniswapV2Pair.MINIMUM_LIQUIDITY());
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - 2 ether + amount0);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - 3 ether + amount1);
+    }
+
+    function test_BurnNoLiquidity() public {
+        // 0x12: divide/modulo by zero
+        vm.expectRevert(stdError.divisionError);
+
+        uniswapV2Pair.burn(address(this));
+    }
+
+    function test_BurnInsufficientLiquidityBurned() public {
+        addLiquidity(1 ether, 1 ether);
+
+        vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED"));
+        uniswapV2Pair.burn(address(this));
+    }
+
+    function test_BurnMultipleUsers() public {
+        uint256 l1 = addLiquidity(1 ether, 1 ether);
+        uint256 l2 = addLiquidity(alice, 2 ether, 3 ether);
+
+        uniswapV2Pair.transfer(pairAddress, l1);
+        (uint256 amount0, uint256 amount1) = uniswapV2Pair.burn(address(this));
+
+        assertEq(uniswapV2Pair.balanceOf(address(this)), 0);
+        assertEq(uniswapV2Pair.balanceOf(alice), l2);
+        assertEq(uniswapV2Pair.totalSupply(), l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+        assertPairReserves(3 ether - amount0, 4 ether - amount1);
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - 1 ether + amount0);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - 1 ether + amount1);
+    }
+
+    function test_BurnUnbalancedMultipleUsers() public {
+        uint256 l1 = addLiquidity(1 ether, 1 ether);
+        uint256 l2 = addLiquidity(alice, 2 ether, 3 ether);
+
+        vm.startPrank(alice);
+        uniswapV2Pair.transfer(pairAddress, l2);
+        (uint256 a00, uint256 a01) = uniswapV2Pair.burn(alice);
+        vm.stopPrank();
+
+        uniswapV2Pair.transfer(pairAddress, l1);
+        (uint256 a10, uint256 a11) = uniswapV2Pair.burn(address(this));
+
+        uint256 expecteda00 = 3 ether * l2 / (l1 + l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+        uint256 expecteda01 = 4 ether * l2 / (l1 + l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+        uint256 expecteda10 = 3 ether * l1 / (l1 + l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+        uint256 expecteda11 = 4 ether * l1 / (l1 + l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+
+        assertEq(uniswapV2Pair.balanceOf(address(this)), 0);
+        assertEq(uniswapV2Pair.balanceOf(alice), 0);
+        assertEq(uniswapV2Pair.totalSupply(), uniswapV2Pair.MINIMUM_LIQUIDITY());
+
+        assertEq(a00, expecteda00);
+        assertEq(a01, expecteda01);
+        assertEq(a10, expecteda10);
+        assertEq(a11, expecteda11);
+        // second user penalised for unbalanced liquidity, hence reserves unbalanced
+        assertPairReserves(uniswapV2Pair.MINIMUM_LIQUIDITY(), 4 ether - expecteda01 - expecteda11);
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - 1 ether + a10);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - 1 ether + a11);
+        assertEq(token0.balanceOf(alice), INIT_TOKEN_AMT - 2 ether + a00);
+        assertEq(token1.balanceOf(alice), INIT_TOKEN_AMT - 3 ether + a01);
+    }
+
+    function test_CumulativePrices() public {
+        vm.warp(0);
+        addLiquidity(1 ether, 1 ether);
+
+        uniswapV2Pair.sync();
+        assertCumulativePrices(0, 0);
+
+        (uint256 currentPrice0, uint256 currentPrice1) = calculatePrice(1 ether, 1 ether);
+
+        vm.warp(1);
+        uniswapV2Pair.sync();
+        assertBlockTimestampLast(1);
+        assertCumulativePrices(currentPrice0, currentPrice1);
+
+        vm.warp(2);
+        uniswapV2Pair.sync();
+        assertBlockTimestampLast(2);
+        assertCumulativePrices(currentPrice0 * 2, currentPrice1 * 2);
+
+        vm.warp(3);
+        uniswapV2Pair.sync();
+        assertBlockTimestampLast(3);
+        assertCumulativePrices(currentPrice0 * 3, currentPrice1 * 3);
+
+        addLiquidity(alice, 2 ether, 3 ether);
+
+        (uint256 newPrice0, uint256 newPrice1) = calculatePrice(3 ether, 4 ether);
+
+        vm.warp(4);
+        uniswapV2Pair.sync();
+        assertBlockTimestampLast(4);
+        assertCumulativePrices(currentPrice0 * 3 + newPrice0, currentPrice1 * 3 + newPrice1);
+
+        vm.warp(5);
+        uniswapV2Pair.sync();
+        assertBlockTimestampLast(5);
+        assertCumulativePrices(currentPrice0 * 3 + newPrice0 * 2, currentPrice1 * 3 + newPrice1 * 2);
+
+        vm.warp(6);
+        uniswapV2Pair.sync();
+        assertBlockTimestampLast(6);
+        assertCumulativePrices(currentPrice0 * 3 + newPrice0 * 3, currentPrice1 * 3 + newPrice1 * 3);
+    }
+
+    function addLiquidity(uint256 token0Amount, uint256 token1Amount) private returns (uint256) {
         token0.transfer(pairAddress, token0Amount);
         token1.transfer(pairAddress, token1Amount);
-        UniswapV2Pair(pairAddress).mint(address(this));
+        return UniswapV2Pair(pairAddress).mint(address(this));
     }
 
-    function SwapTest(
-        uint256 swapAmount,
-        uint256[2] memory liqudity,
-        uint256 expectedOutputAmount0,
-        uint256 expectedOutputAmount1
-    ) private {
-        addLiquidity(liqudity[0], liqudity[1]);
-        token0.transfer(pairAddress, swapAmount);
-        uniswapV2Pair.swap(expectedOutputAmount0, expectedOutputAmount1, address(this));
+    function addLiquidity(address user, uint256 token0Amount, uint256 token1Amount) private returns (uint256 l) {
+        vm.startPrank(user);
+        token0.transfer(pairAddress, token0Amount);
+        token1.transfer(pairAddress, token1Amount);
+        l = UniswapV2Pair(pairAddress).mint(user);
+        vm.stopPrank();
     }
 
     /**
@@ -528,10 +714,10 @@ contract UniswapV2PairTest is Test {
      */
     function test_CalculateExpectOutputAmountWithFee() public {
         // the init pool
-        uint256[2] memory liqudity = [uint256(5 * 1e18), uint256(10 * 1e18)];
+        uint256[2] memory liqudity = [uint256(5 ether), uint256(10 ether)];
 
         // dy = y*dx/ (x+ dx)
-        uint256 token0Amount = 1 * 1e18;
+        uint256 token0Amount = 1 ether;
         uint256 expectedOutputAmount1 = (liqudity[1] * token0Amount) / (liqudity[0] + token0Amount);
         console.log("my result for token0Amount:", expectedOutputAmount1);
 
@@ -608,5 +794,47 @@ contract UniswapV2PairTest is Test {
         console.log(type(uint112).max / 1e18);
 
         console.log(2 ** 112);
+    }
+
+    function test_Permit() public {
+        bytes32 _TYPE_HASH =
+            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+        bytes32 domain_separator_value = keccak256(
+            abi.encode(_TYPE_HASH, keccak256(bytes("Uniswap V2")), keccak256(bytes("1")), block.chainid, pairAddress)
+        );
+        console.logBytes32(domain_separator_value);
+        assertEq(uniswapV2Pair.DOMAIN_SEPARATOR(), domain_separator_value);
+
+        console.log("nounce", uniswapV2Pair.nonces(address(this)));
+
+        //bytes32 _PERMIT_TYPEHASH = keccak256("Permit(address,address,uint256,uint256,uint256)");
+        sigUtils = new SigUtils(uniswapV2Pair.DOMAIN_SEPARATOR());
+
+        ownerPrivateKey = 0xA11CE;
+        spenderPrivateKey = 0xB0B;
+
+        owner = vm.addr(ownerPrivateKey);
+        spender = vm.addr(spenderPrivateKey);
+
+        tokenA.mint(owner, INIT_TOKEN_AMT);
+        tokenB.mint(owner, INIT_TOKEN_AMT);
+
+        vm.startPrank(owner);
+        token0.transfer(pairAddress, 1 ether);
+        token1.transfer(pairAddress, 1 ether);
+        uint256 l = UniswapV2Pair(pairAddress).mint(owner);
+        vm.stopPrank();
+
+        SigUtils.Permit memory permit =
+            SigUtils.Permit({owner: owner, spender: spender, value: l, nonce: 0, deadline: 1 days});
+
+        bytes32 digest = sigUtils.getTypedDataHash(permit);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPrivateKey, digest);
+
+        uniswapV2Pair.permit(permit.owner, permit.spender, permit.value, permit.deadline, v, r, s);
+
+        assertEq(uniswapV2Pair.allowance(owner, spender), l);
+        assertEq(uniswapV2Pair.nonces(owner), 1);
     }
 }

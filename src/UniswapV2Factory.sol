@@ -43,4 +43,14 @@ contract UniswapV2Factory is IUniswapV2Factory {
         require(msg.sender == feeToSetter, "UniswapV2: FORBIDDEN");
         feeToSetter = _feeToSetter;
     }
+
+    // ========= Public Helper Functions =========
+
+    function getAllPairLength() external view returns (uint256) {
+        return allPairs.length;
+    }
+
+    function getAllPairsIndex(uint256 index) external view returns (address) {
+        return allPairs[index];
+    }
 }
