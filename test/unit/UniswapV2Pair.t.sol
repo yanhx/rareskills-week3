@@ -89,20 +89,6 @@ contract UniswapV2PairTest is Test {
     }
 
     /**
-     * Test functions
-     *     1:test_Mint()
-     *     2:test_AddLiquidity()
-     *     3:test_SwapNormalCases()
-     *     4:test_SwapCasesWithFees()
-     *     5:test_SwapToken0AndCheck()
-     *     6:test_SwapToken1AndCheck()
-     *     7:test_burn()
-     *     8:test_burnReceivedAllTokens()
-     *     9:test_TAWP()
-     *     10:test_CalculateExpectOutputAmountWithFee()
-     */
-
-    /**
      *   https://book.getfoundry.sh/forge/cheatcodes, check the event
      * math points
      *
@@ -453,6 +439,32 @@ contract UniswapV2PairTest is Test {
         token0.transfer(pairAddress, 1 ether);
         vm.expectRevert(bytes("UniswapV2: K"));
         uniswapV2Pair.swap(0 ether, 0.5 ether, alice);
+    }
+
+    function test_SwapExactInForOut() public {
+        addLiquidity(1 ether, 1 ether);
+
+        token1.approve(pairAddress, 1 ether);
+        vm.expectRevert(bytes("swapExactInForOut: INSUFFICIENT_OUTPUT_AMOUNT"));
+        uniswapV2Pair.swapExactInForOut(true, 1 ether, 0.5 ether, alice);
+
+        uint256 amountOut = uniswapV2Pair.swapExactInForOut(true, 1 ether, 0.4 ether, alice);
+
+        assertPairReserves(1 ether - amountOut, 2 ether);
+        assertEq(token0.balanceOf(alice), INIT_TOKEN_AMT + amountOut);
+    }
+
+    function test_SwapInForExactOut() public {
+        addLiquidity(1 ether, 1 ether);
+
+        token1.approve(pairAddress, 1.5 ether);
+        vm.expectRevert(bytes("swapInForExactOut: INSUFFICIENT_INPUT_AMOUNT"));
+        uniswapV2Pair.swapInForExactOut(true, 1 ether, 0.5 ether, alice);
+
+        uint256 amountIn = uniswapV2Pair.swapInForExactOut(true, 1.1 ether, 0.5 ether, alice);
+
+        assertPairReserves(0.5 ether, 1 ether + amountIn);
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - 1 ether - amountIn);
     }
 
     // hints: because the MINIMUM_LIQUIDITY,received token0 and token1 will decrease 1000 TODO

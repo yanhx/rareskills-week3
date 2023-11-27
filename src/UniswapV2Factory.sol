@@ -10,6 +10,7 @@ contract UniswapV2Factory is IUniswapV2Factory {
     address public feeToSetter;
 
     mapping(address => mapping(address => address)) public getPair;
+    //https://dapp.org.uk/reports/uniswapv2.html#orgdeb0867
     address[] public allPairs;
 
     constructor(address _feeToSetter) {
@@ -29,7 +30,7 @@ contract UniswapV2Factory is IUniswapV2Factory {
 
         pair = address(new UniswapV2Pair{salt: keccak256(abi.encodePacked(token0, token1))}(token0, token1));
         getPair[token0][token1] = pair;
-        getPair[token1][token0] = pair; // populate mapping in the reverse direction
+        getPair[token1][token0] = pair; // populate mapping in the reverse direction, deliberate choice to avoid the cost of comparing addresses
         allPairs.push(pair);
         emit PairCreated(token0, token1, pair, allPairs.length);
     }
