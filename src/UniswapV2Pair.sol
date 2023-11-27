@@ -52,6 +52,38 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
 
     // this low-level function should be called from a contract which performs important safety checks
     function mint(address to) external nonReentrant returns (uint256 liquidity) {
+        return _mint(to);
+    }
+
+    function mintWithApproval(
+        address to,
+        uint256 amount0Desired,
+        uint256 amount1Desired,
+        uint256 amount0Min,
+        uint256 amount1Min
+    ) external nonReentrant returns (uint256 liquidity) {
+        uint256 amount0;
+        uint256 amount1;
+        if (reserve0 == 0 && reserve1 == 0) {
+            (amount0, amount1) = (amount0Desired, amount1Desired);
+        } else {
+            amount1 = amount0Desired * reserve1 / reserve0;
+            if (amount1 <= amount1Desired) {
+                require(amount1 >= amount1Min, "UniswapV2: INSUFFICIENT_1_AMOUNT");
+                amount0 = amount0Desired;
+            } else {
+                amount0 = amount1Desired * reserve0 / reserve1;
+                assert(amount0 <= amount0Desired);
+                require(amount0 >= amount0Min, "UniswapV2: INSUFFICIENT_0_AMOUNT");
+                amount1 = amount1Desired;
+            }
+        }
+        IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
+        IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
+        liquidity = _mint(to);
+    }
+
+    function _mint(address to) internal returns (uint256 liquidity) {
         (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
         uint256 balance0 = IERC20(token0).balanceOf(address(this));
         uint256 balance1 = IERC20(token1).balanceOf(address(this));
@@ -79,6 +111,21 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
     // this low-level function should be called from a contract which performs important safety checks
     // dx = X (S/T )  dy = Y （S/T）
     function burn(address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
+        return _burn(to);
+    }
+
+    function burnWithApproval(address to, uint256 liquidity, uint256 amount0Min, uint256 amount1Min)
+        external
+        nonReentrant
+        returns (uint256 amount0, uint256 amount1)
+    {
+        this.transferFrom(msg.sender, address(this), liquidity);
+        (amount0, amount1) = _burn(to);
+        require(amount0 >= amount0Min, "UniswapV2: INSUFFICIENT_0_AMOUNT");
+        require(amount1 >= amount1Min, "UniswapV2: INSUFFICIENT_1_AMOUNT");
+    }
+
+    function _burn(address to) internal returns (uint256 amount0, uint256 amount1) {
         (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // gas savings
         address _token0 = token0; // gas savings
         address _token1 = token1; // gas savings

@@ -67,7 +67,6 @@ contract UniswapV2PairTest is Test {
         uniswapV2Factory = new UniswapV2Factory(_feeToSetter);
         pairAddress = uniswapV2Factory.createPair(address(tokenA), address(tokenB));
         uniswapV2Pair = UniswapV2Pair(pairAddress);
-        console.log("pairAddress", pairAddress);
         (token0, token1) = getOrderERC20Mock(tokenA, tokenB);
     }
 
@@ -238,6 +237,28 @@ contract UniswapV2PairTest is Test {
         assertEq(uniswapV2Pair.balanceOf(alice), l2);
         assertEq(l2, expectedLiquidity * 2);
         assertEq(uniswapV2Pair.totalSupply(), expectedLiquidity * 3);
+    }
+
+    function test_MintWithApproval() public {
+        token0.approve(pairAddress, 1 ether);
+        token1.approve(pairAddress, 1 ether);
+        uint256 l1 = UniswapV2Pair(pairAddress).mintWithApproval(address(this), 1 ether, 1 ether, 1 ether, 1 ether);
+        uint256 expectedLiquidity = Math.sqrt(1 ether * 1 ether);
+
+        assertPairReserves(1 ether, 1 ether);
+        assertEq(uniswapV2Pair.balanceOf(address(this)), expectedLiquidity - uniswapV2Pair.MINIMUM_LIQUIDITY());
+        assertEq(uniswapV2Pair.totalSupply(), l1 + uniswapV2Pair.MINIMUM_LIQUIDITY());
+
+        token0.approve(pairAddress, 1 ether);
+        token1.approve(pairAddress, 1 ether);
+        vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_1_AMOUNT"));
+        UniswapV2Pair(pairAddress).mintWithApproval(address(this), 1 ether, 2 ether, 1 ether, 1.5 ether);
+
+        uint256 l2 = UniswapV2Pair(pairAddress).mintWithApproval(address(this), 1 ether, 2 ether, 1 ether, 1 ether);
+
+        assertPairReserves(2 ether, 2 ether);
+        assertEq(uniswapV2Pair.balanceOf(address(this)), l1 + l2);
+        assertEq(uniswapV2Pair.totalSupply(), l1 + l2 + uniswapV2Pair.MINIMUM_LIQUIDITY());
     }
 
     /**
@@ -645,6 +666,22 @@ contract UniswapV2PairTest is Test {
         assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - 1 ether + a11);
         assertEq(token0.balanceOf(alice), INIT_TOKEN_AMT - 2 ether + a00);
         assertEq(token1.balanceOf(alice), INIT_TOKEN_AMT - 3 ether + a01);
+    }
+
+    function test_BurnWithApproval() public {
+        uint256 l1 = addLiquidity(1 ether, 1 ether);
+        uniswapV2Pair.approve(pairAddress, l1);
+
+        vm.expectRevert(bytes("UniswapV2: INSUFFICIENT_0_AMOUNT"));
+        uniswapV2Pair.burnWithApproval(address(this), l1, 1 ether, 1 ether);
+
+        uniswapV2Pair.burnWithApproval(address(this), l1, l1, l1);
+
+        assertEq(uniswapV2Pair.balanceOf(address(this)), 0);
+        assertEq(uniswapV2Pair.totalSupply(), uniswapV2Pair.MINIMUM_LIQUIDITY());
+
+        assertEq(token0.balanceOf(address(this)), INIT_TOKEN_AMT - uniswapV2Pair.MINIMUM_LIQUIDITY());
+        assertEq(token1.balanceOf(address(this)), INIT_TOKEN_AMT - uniswapV2Pair.MINIMUM_LIQUIDITY());
     }
 
     function test_CumulativePrices() public {
