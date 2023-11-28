@@ -22,12 +22,10 @@ import {ud, unwrap} from "@prb/math/src/UD60x18.sol";
 contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3156FlashLender {
     using SafeERC20 for IERC20;
 
-    // flash loan TODO
     bytes32 public constant CALLBACK_SUCCESS = keccak256("ERC3156FlashBorrower.onFlashLoan");
-    // uint256 public fee; //  1 == 0.01 %. should adjust based on the uniswap_v2 flashloan fee
 
     uint256 public constant MINIMUM_LIQUIDITY = 10 ** 3;
-    uint256 public constant FEE_RATIO = 3; // 3 of 1000
+    uint256 public constant FEE_RATIO = 3; // 3 of 1000, 1 == 0.1 %
 
     address public immutable factory;
     address public immutable token0;
@@ -41,7 +39,6 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
     uint256 public price1CumulativeLast;
     uint256 public kLast; // reserve0 * reserve1, as of immediately after the most recent liquidity event
 
-    //TODO
     event FlashLoan(address indexed borrower, address indexed token, uint256 amount);
 
     constructor(address _token0, address _token1) {
@@ -95,7 +92,7 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
         if (_totalSupply == 0) {
             //sqrt returns floor
             liquidity = FixedPointMathLib.sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
-            _mint(address(0), MINIMUM_LIQUIDITY); // permanently lock the first MINIMUM_LIQUIDITY tokens TODO//  address(0) => address(1) ,for ERC20Permit first MINIMUM_LIQUIDITY
+            _mint(address(0), MINIMUM_LIQUIDITY); // permanently lock the first MINIMUM_LIQUIDITY tokens
         } else {
             liquidity =
                 FixedPointMathLib.min((amount0 * _totalSupply) / _reserve0, (amount1 * _totalSupply) / _reserve1);
@@ -223,7 +220,7 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
     }
 
     // update reserves and, on the first call per block, price accumulators
-    // ? how to guarantee the first call per block?? timeElapsed > 0
+    // how to guarantee the first call per block?? timeElapsed > 0
     function _update(uint256 balance0, uint256 balance1, uint112 _reserve0, uint112 _reserve1) private {
         require(balance0 <= type(uint112).max && balance1 <= type(uint112).max, "UniswapV2: OVERFLOW");
 
@@ -316,14 +313,6 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
      * 5. user want to use the flashswap  in uniswap_v2 , should calling swap which support typical swap and flashswap, the EIP 3156 directly call the flashloan function
      * 6. the borrower must be the smart contract address in this implementation and for uniswap-v2 the borrower can be the  EOA address
      *
-     *    security considerations
-     * if the borrower lies, how to deal with?  lender check the arguments.
-     *
-     *
-     * other implementation. diffrerent current implementation
-     *
-     *
-     * when the fee returned, have some effects on the formula k
      *
      */
     function flashLoan(IERC3156FlashBorrower receiver, address token, uint256 amount, bytes calldata data)
@@ -364,8 +353,6 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
      * @param amount The amount of tokens lent.
      * @return The amount of `token` to be charged for the loan, on top of the returned principal.
      *
-     * amount * 3 / 1000 have precious problem? at least borrow 1000
-     *
      */
     function flashFee(address token, uint256 amount) external view returns (uint256) {
         require(token == token0 || token == token1, "FlashLender: Unsupported currency");
@@ -380,7 +367,7 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
      * @return The amount of `token` to be charged for the loan, on top of the returned principal.
      */
     function _flashFee(address token, uint256 amount) internal pure returns (uint256) {
-        return amount * FEE_RATIO / 1000;
+        return amount * FEE_RATIO / 1000 + 1;
     }
 
     /**
@@ -390,7 +377,7 @@ contract UniswapV2Pair is UniswapV2ERC20, IUniswapV2Pair, ReentrancyGuard, IERC3
      */
     function maxFlashLoan(address token) public view override returns (uint256) {
         require(token == token0 || token == token1, "FlashLender: Unsupported currency");
-        if (token == token0) return reserve0;
-        else return reserve1;
+        if (token == token0) return reserve0 - MINIMUM_LIQUIDITY;
+        else return reserve1 - MINIMUM_LIQUIDITY;
     }
 }

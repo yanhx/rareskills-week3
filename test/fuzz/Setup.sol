@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.20;
+
+import "../../src/UniswapV2Pair.sol";
+import "../../src/UniswapV2ERC20.sol";
+import "../../src/UniswapV2Factory.sol";
+import "../../src/libraries/UniswapV2Library.sol";
+import "./User.sol";
+
+import {ERC20Mock} from "lib/solady/ext/woke/ERC20Mock.sol";
+
+/// @title Foundry/Echidna compatible setup contract
+/// @author Justin Jacob <@technovision99>, Antonio Viggiano <@agfviggiano>
+/// @notice Serves as a compatible setup contract to compare foundry and echidna. This contract was largely inspired by @technovision99's work on the `crytic/echidna-streaming-series` repository.
+/// @dev Contains modifiers and initialization functions common to both frameworks, in addition to deploment functions that must be applied at different stages. See specific tester contracts for more information.
+contract Setup {
+    struct Vars {
+        uint256 userLpBalanceBefore;
+        uint256 userLpBalanceAfter;
+        uint256 feeToLpBalanceBefore;
+        uint256 feeToLpBalanceAfter;
+        uint256 lpTotalSupplyBefore;
+        uint256 lpTotalSupplyAfter;
+        uint256 pairBalance1Before;
+        uint256 pairBalance2Before;
+        uint256 pairBalance1After;
+        uint256 pairBalance2After;
+        uint256 userBalance1Before;
+        uint256 userBalance2Before;
+        uint256 userBalance1After;
+        uint256 userBalance2After;
+        uint256 reserve1Before;
+        uint256 reserve1After;
+        uint256 reserve2Before;
+        uint256 reserve2After;
+        uint256 kBefore;
+        uint256 kAfter;
+    }
+
+    ERC20Mock internal token1;
+    ERC20Mock internal token2;
+    UniswapV2Pair internal pair;
+    UniswapV2Factory internal factory;
+
+    User internal user;
+    Vars internal vars;
+
+    bool private complete;
+
+    modifier initUser() {
+        if (user == User(address(0))) {
+            user = new User();
+        }
+
+        _;
+    }
+
+    function _deploy() internal {
+        token1 = new ERC20Mock('TOKENA','TA', 18);
+        token2 = new ERC20Mock('TOKENB','TB', 18);
+        factory = new UniswapV2Factory(address(this)); // this contract will be the fee setter
+        factory.setFeeTo(address(this)); // turn fees on
+        pair = UniswapV2Pair(factory.createPair(address(token1), address(token2)));
+        // Sort the test tokens we just created, for clarity when writing invariant tests later
+        (address testTokenA, address testTokenB) = UniswapV2Library.sortTokens(address(token1), address(token2));
+        token1 = ERC20Mock(testTokenA);
+        token2 = ERC20Mock(testTokenB);
+    }
+
+    function _mintTokensOnce(uint256 amount1, uint256 amount2) internal {
+        // NOTE This initial setup is done only once across the whole fuzzing campaign. You may get different results if you allow minting to happen every time.
+        if (complete) return;
+
+        token2.mint(address(user), amount2);
+        token1.mint(address(user), amount1);
+        user.proxy(address(token1), abi.encodeWithSelector(token1.approve.selector, address(pair), type(uint256).max));
+        user.proxy(address(token2), abi.encodeWithSelector(token2.approve.selector, address(pair), type(uint256).max));
+        complete = true;
+    }
+
+    function _before() internal {
+        (vars.reserve1Before, vars.reserve2Before,) = pair.getReserves();
+        vars.userLpBalanceBefore = pair.balanceOf(address(user));
+        vars.feeToLpBalanceBefore = pair.balanceOf(factory.feeTo());
+        vars.lpTotalSupplyBefore = pair.totalSupply();
+        vars.userBalance1Before = token1.balanceOf(address(user));
+        vars.userBalance2Before = token2.balanceOf(address(user));
+        vars.pairBalance1Before = token1.balanceOf(address(pair));
+        vars.pairBalance2Before = token2.balanceOf(address(pair));
+        vars.userBalance1Before = token1.balanceOf(address(user));
+        vars.userBalance2Before = token2.balanceOf(address(user));
+        vars.kBefore = vars.reserve1Before * vars.reserve2Before;
+    }
+
+    function _after() internal {
+        (vars.reserve1After, vars.reserve2After,) = pair.getReserves();
+        vars.userLpBalanceAfter = pair.balanceOf(address(user));
+        vars.feeToLpBalanceAfter = pair.balanceOf(factory.feeTo());
+        vars.lpTotalSupplyAfter = pair.totalSupply();
+        vars.userBalance1After = token1.balanceOf(address(user));
+        vars.userBalance2After = token2.balanceOf(address(user));
+        vars.pairBalance1After = token1.balanceOf(address(pair));
+        vars.pairBalance2After = token2.balanceOf(address(pair));
+        vars.userBalance1After = token1.balanceOf(address(user));
+        vars.userBalance2After = token2.balanceOf(address(user));
+        vars.kAfter = vars.reserve1After * vars.reserve2After;
+    }
+}

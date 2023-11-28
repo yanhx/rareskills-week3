@@ -3,6 +3,10 @@
 pragma solidity 0.8.20;
 
 library UniswapV2Library {
+    function sortTokens(address token0, address token1) internal pure returns (address, address) {
+        return token0 < token1 ? (token0, token1) : (token1, token0);
+    }
+
     // given some amount of an asset and pair reserves, returns an equivalent amount of the other asset
     function quote(uint256 amountA, uint256 reserveA, uint256 reserveB) internal pure returns (uint256 amountB) {
         require(amountA > 0, "UniswapV2Library: INSUFFICIENT_AMOUNT");

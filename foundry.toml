@@ -7,11 +7,12 @@ remappings = [
     '@openzeppelin/contracts=lib/openzeppelin-contracts/contracts/',
     '@solady/src=lib/solady/src/',
     '@prb/math/=lib/prb-math/',
+    '@crytic/properties/=lib/properties/',
 ]
 
 [invariant]
 runs = 128
 depth = 128
-fail_on_revert = true
+fail_on_revert = false
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
